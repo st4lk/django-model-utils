@@ -5,6 +5,7 @@ from copy import deepcopy
 import django
 from django.core.exceptions import FieldError
 from django.db import models
+from django.db.models.fields.files import FileDescriptor
 from django.db.models.query_utils import DeferredAttribute
 
 
@@ -79,6 +80,20 @@ class FieldInstanceTracker(object):
                     self.saved_data[field.field_name] = deepcopy(value)
                 return data[field.field_name]
 
+        class FileDescriptorTracker(FileDescriptor):
+            def __get__(field, instance, owner=None):
+                if instance is None:
+                    return field
+                was_deferred = False
+                if field.field.name in instance._deferred_fields:
+                    instance._deferred_fields.remove(field.field.name)
+                    was_deferred = True
+                value = super(FileDescriptorTracker, field).__get__(
+                        instance, owner)
+                if was_deferred:
+                    self.saved_data[field.field.name] = deepcopy(value)
+                return instance.__dict__[field.field.name]
+
         if django.VERSION >= (1, 8):
             self.instance._deferred_fields = self.instance.get_deferred_fields()
             for field in self.instance._deferred_fields:
@@ -86,9 +101,13 @@ class FieldInstanceTracker(object):
                     field_obj = getattr(self.instance.__class__, field)
                 else:
                     field_obj = self.instance.__class__.__dict__.get(field)
-                field_tracker = DeferredAttributeTracker(
-                    field_obj.field_name, None)
-                setattr(self.instance.__class__, field, field_tracker)
+                if isinstance(field_obj, FileDescriptor):
+                    field_tracker = FileDescriptorTracker(field_obj.field)
+                    setattr(self.instance.__class__, field, field_tracker)
+                else:
+                    field_tracker = DeferredAttributeTracker(
+                        field_obj.field_name, None)
+                    setattr(self.instance.__class__, field, field_tracker)
         else:
             for field in self.fields:
                 field_obj = self.instance.__class__.__dict__.get(field)
